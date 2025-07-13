@@ -96,7 +96,7 @@ impl Board {
         Board { grid, current_turn: Side::White, status: GameStatus::Ongoing }
     }
 
-    pub fn make_move(&mut self, from: Position, to: Position) -> Result<(), &'static str> {
+    pub fn make_move(&mut self, from: Position, to: Position, promotion: Option<PieceType>) -> Result<(), &'static str> {
         let piece = self.grid[from.y][from.x].ok_or("There is no piece at the starting square.")?;
 
         if piece.color != self.current_turn {
@@ -108,7 +108,23 @@ impl Board {
             return Err("This is not a legal move for that piece.");
         }
 
-        self.grid[to.y][to.x] = self.grid[from.y][from.x].take();
+        let is_promotion = piece.piece_type == PieceType::Pawn && (to.y == 0 || to.y == 7);
+
+        if is_promotion {
+            let promo_piece = promotion.ok_or("Move requires a promotion piece (q, r, b, or n).")?;
+            if promo_piece == PieceType::King || promo_piece == PieceType::Pawn {
+                return Err("Invalid promotion piece.");
+            }
+            // Perform the move and then promote
+            self.grid[to.y][to.x] = Some(ChessPiece::new(promo_piece, piece.color));
+            self.grid[from.y][from.x] = None;
+        } else {
+            if promotion.is_some() {
+                return Err("Promotion can only be specified for a pawn reaching the final rank.");
+            }
+            // Normal move
+            self.grid[to.y][to.x] = self.grid[from.y][from.x].take();
+        }
 
         // Switch turns and update game status
         self.current_turn = match self.current_turn {
@@ -357,23 +373,37 @@ impl fmt::Display for Board {
 }
 
 // Parse moves
-fn parse_move(input: &str) -> Result<(Position, Position), &'static str> {
-    let chars: Vec<char> = input.trim().to_lowercase().chars().collect();
-    if chars.len() != 4 {
-        return Err("Invalid input length. Use format like 'e2e4'.");
+fn parse_move(input: &str) -> Result<(Position, Position, Option<PieceType>), &'static str> {
+    let trimmed_input = input.trim().to_lowercase();
+    let chars: Vec<char> = trimmed_input.chars().collect();
+    if !(4..=5).contains(&chars.len()) {
+        return Err("Invalid input length. Use format 'e2e4' or 'e7e8q'.");
     }
 
     let from_x = (chars[0] as u8).wrapping_sub(b'a') as usize;
     let to_x = (chars[2] as u8).wrapping_sub(b'a') as usize;
-
     let from_y = 8_usize.wrapping_sub(chars[1].to_digit(10).unwrap_or(9) as usize);
     let to_y = 8_usize.wrapping_sub(chars[3].to_digit(10).unwrap_or(9) as usize);
 
     if from_x > 7 || to_x > 7 || from_y > 7 || to_y > 7 {
-        return Err("Invalid coordinate. Files must be 'a'-'h', ranks '1'-'8'.");
+        return Err("Invalid coordinate. Files 'a'-'h', ranks '1'-'8'.");
     }
 
-    Ok((Position { x: from_x, y: from_y }, Position { x: to_x, y: to_y }))
+    let promotion = if chars.len() == 5 {
+        let promo_char = chars[4];
+        let piece_type = match promo_char {
+            'q' => PieceType::Queen,
+            'r' => PieceType::Rook,
+            'b' => PieceType::Bishop,
+            'n' => PieceType::Knight,
+            _ => return Err("Invalid promotion character. Use q, r, b, or n."),
+        };
+        Some(piece_type)
+    } else {
+        None
+    };
+
+    Ok((Position { x: from_x, y: from_y }, Position { x: to_x, y: to_y }, promotion))
 }
 fn main() {
     let mut board = Board::new();
@@ -381,22 +411,17 @@ fn main() {
 
     loop {
         print!("\x1B[2J\x1B[1;1H");
-        println!("CHESS");
         println!("{}", board);
         
         if let Some(msg) = &message {
             println!("\nInfo: {}", msg);
         }
 
-        // Check game status before asking for a move
         if board.status != GameStatus::Ongoing {
             println!("\n--- GAME OVER ---");
             match board.status {
                 GameStatus::Checkmate => {
-                    let winner = match board.current_turn {
-                        Side::White => "Black",
-                        Side::Black => "White",
-                    };
+                    let winner = match board.current_turn { Side::White => "Black", Side::Black => "White" };
                     println!("Checkmate! {} wins.", winner);
                 }
                 GameStatus::Stalemate => println!("Stalemate!"),
@@ -410,7 +435,7 @@ fn main() {
         }
 
         println!("\n{:?}'s turn.", board.current_turn);
-        print!("Enter move (e.g. e2e4) or 'quit': ");
+        print!("Enter move (e.g. e2e4 or e7e8q) or 'quit': ");
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
@@ -421,8 +446,8 @@ fn main() {
         }
 
         match parse_move(&input) {
-            Ok((from, to)) => {
-                match board.make_move(from, to) {
+            Ok((from, to, promotion)) => {
+                match board.make_move(from, to, promotion) {
                     Ok(()) => message = None,
                     Err(e) => message = Some(e.to_string()),
                 }
