@@ -58,18 +58,25 @@ impl ChessPiece {
         ChessPiece { piece_type, color }
     }
 
+    // Unicode chess symbols
     fn to_char(&self) -> char {
-        let c = match self.piece_type {
-            PieceType::Pawn => 'P',
-            PieceType::Knight => 'N',
-            PieceType::Bishop => 'B',
-            PieceType::Rook => 'R',
-            PieceType::Queen => 'Q',
-            PieceType::King => 'K',
-        };
         match self.color {
-            Side::White => c,
-            Side::Black => c.to_ascii_lowercase(),
+            Side::White => match self.piece_type {
+                PieceType::Pawn => '♙',
+                PieceType::Knight => '♘',
+                PieceType::Bishop => '♗',
+                PieceType::Rook => '♖',
+                PieceType::Queen => '♕',
+                PieceType::King => '♔',
+            },
+            Side::Black => match self.piece_type {
+                PieceType::Pawn => '♟',
+                PieceType::Knight => '♞',
+                PieceType::Bishop => '♝',
+                PieceType::Rook => '♜',
+                PieceType::Queen => '♛',
+                PieceType::King => '♚',
+            },
         }
     }
 }
@@ -415,20 +422,31 @@ impl Board {
 
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "   a b c d e f g h")?;
-        writeln!(f, " +-----------------+")?;
+        // ANSI codes for colors
+        const WHITE_SQUARE: &str = "\x1B[48;5;250m"; // Light grey background
+        const BLACK_SQUARE: &str = "\x1B[48;5;240m"; // Dark grey background
+        const RESET_COLOR: &str = "\x1B[0m";
+
+        writeln!(f, "\n   a  b  c  d  e  f  g  h")?;
         for y in 0..8 {
-            write!(f, "{}| ", 8 - y)?;
+            write!(f, "{} ", 8 - y)?;
             for x in 0..8 {
-                match self.grid[y][x] {
-                    Some(piece) => write!(f, "{} ", piece.to_char())?,
-                    None => write!(f, ". ")?,
-                }
+                let bg_color = if (x + y) % 2 == 0 {
+                    WHITE_SQUARE
+                } else {
+                    BLACK_SQUARE
+                };
+                
+                let piece_char = match self.grid[y][x] {
+                    Some(piece) => piece.to_char(),
+                    None => ' ',
+                };
+                // Print the square with its background color and the piece
+                write!(f, "{}{}{}{}", bg_color, " ", piece_char, " ")?;
             }
-            writeln!(f, "|{}", 8-y)?;
+            writeln!(f, "{}{}", RESET_COLOR, 8 - y)?;
         }
-        writeln!(f, " +-----------------+")?;
-        writeln!(f, "   a b c d e f g h")
+        writeln!(f, "{}   a  b  c  d  e  f  g  h", RESET_COLOR)
     }
 }
 
