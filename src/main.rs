@@ -54,7 +54,7 @@ impl ChessPiece {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
     pub x: usize,
-    pub y: usize,
+    pub y: usize
 }
 
 #[derive(Clone)] // We need to clone the board to check for future states
@@ -62,6 +62,7 @@ pub struct Board {
     grid: [[Option<ChessPiece>; 8]; 8],
     pub current_turn: Side,
     pub status: GameStatus,
+    pub en_passant_target: Option<Position>
 }
 
 impl Board {
@@ -93,7 +94,7 @@ impl Board {
             grid[6][i] = Some(ChessPiece::new(PieceType::Pawn, Side::White));
         }
 
-        Board { grid, current_turn: Side::White, status: GameStatus::Ongoing }
+        Board { grid, current_turn: Side::White, status: GameStatus::Ongoing, en_passant_target: None }
     }
 
     pub fn make_move(&mut self, from: Position, to: Position, promotion: Option<PieceType>) -> Result<(), &'static str> {
@@ -107,15 +108,32 @@ impl Board {
         if !legal_moves.contains(&to) {
             return Err("This is not a legal move for that piece.");
         }
+        
+        let mut new_en_passant_target = None;
 
+        // Check for pawn's double-step to set the en passant target for the NEXT turn
+        if piece.piece_type == PieceType::Pawn {
+            if (from.y as i8 - to.y as i8).abs() == 2 {
+                new_en_passant_target = Some(Position { x: from.x, y: (from.y + to.y) / 2 });
+            }
+        }
+
+        // Handle the actual capture in an en passant move
+        if piece.piece_type == PieceType::Pawn && Some(to) == self.en_passant_target {
+            let captured_pawn_y = match piece.color {
+                Side::White => to.y + 1,
+                Side::Black => to.y - 1,
+            };
+            self.grid[captured_pawn_y][to.x] = None; // Remove the captured pawn
+        }
+        
+        // Promotion
         let is_promotion = piece.piece_type == PieceType::Pawn && (to.y == 0 || to.y == 7);
-
         if is_promotion {
             let promo_piece = promotion.ok_or("Move requires a promotion piece (q, r, b, or n).")?;
             if promo_piece == PieceType::King || promo_piece == PieceType::Pawn {
                 return Err("Invalid promotion piece.");
             }
-            // Perform the move and then promote
             self.grid[to.y][to.x] = Some(ChessPiece::new(promo_piece, piece.color));
             self.grid[from.y][from.x] = None;
         } else {
@@ -126,7 +144,8 @@ impl Board {
             self.grid[to.y][to.x] = self.grid[from.y][from.x].take();
         }
 
-        // Switch turns and update game status
+        // Update state for the next turn for en passant
+        self.en_passant_target = new_en_passant_target;
         self.current_turn = match self.current_turn {
             Side::White => Side::Black,
             Side::Black => Side::White,
@@ -320,7 +339,8 @@ impl Board {
     fn get_pawn_moves(&self, pos: Position, color: Side) -> Vec<Position> {
         let mut moves = Vec::new();
         let direction: i8 = if color == Side::White { -1 } else { 1 };
-
+        
+        // Forward moves
         let fwd1_y = pos.y as i8 + direction;
         if (0..8).contains(&fwd1_y) {
             let fwd1_pos = Position { x: pos.x, y: fwd1_y as usize };
@@ -330,21 +350,24 @@ impl Board {
                 if pos.y == start_rank {
                     let fwd2_y = pos.y as i8 + 2 * direction;
                     let fwd2_pos = Position { x: pos.x, y: fwd2_y as usize };
-                    if self.grid[fwd2_pos.y][fwd2_pos.x].is_none() {
-                        moves.push(fwd2_pos);
-                    }
+                    if self.grid[fwd2_pos.y][fwd2_pos.x].is_none() { moves.push(fwd2_pos); }
                 }
             }
         }
-
+        
+        // Captures including en passant
         for &dx in &[-1, 1] {
             let capture_x = pos.x as i8 + dx;
             let capture_y = pos.y as i8 + direction;
-
             if (0..8).contains(&capture_x) && (0..8).contains(&capture_y) {
                 let capture_pos = Position { x: capture_x as usize, y: capture_y as usize };
+                // Normal capture
                 if let Some(target) = self.grid[capture_pos.y][capture_pos.x] {
                     if target.color != color { moves.push(capture_pos); }
+                }
+                // En passant capture
+                if Some(capture_pos) == self.en_passant_target {
+                    moves.push(capture_pos);
                 }
             }
         }
