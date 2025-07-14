@@ -57,12 +57,21 @@ pub struct Position {
     pub y: usize
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CastlingRights {
+    white_kingside: bool,
+    white_queenside: bool,
+    black_kingside: bool,
+    black_queenside: bool,
+}
+
 #[derive(Clone)] // We need to clone the board to check for future states
 pub struct Board {
     grid: [[Option<ChessPiece>; 8]; 8],
     pub current_turn: Side,
     pub status: GameStatus,
-    pub en_passant_target: Option<Position>
+    pub en_passant_target: Option<Position>,
+    castling_rights: CastlingRights
 }
 
 impl Board {
@@ -94,7 +103,14 @@ impl Board {
             grid[6][i] = Some(ChessPiece::new(PieceType::Pawn, Side::White));
         }
 
-        Board { grid, current_turn: Side::White, status: GameStatus::Ongoing, en_passant_target: None }
+        let castling_rights = CastlingRights {
+            white_kingside: true,
+            white_queenside: true,
+            black_kingside: true,
+            black_queenside: true,
+        };
+
+        Board { grid, current_turn: Side::White, status: GameStatus::Ongoing, en_passant_target: None, castling_rights }
     }
 
     pub fn make_move(&mut self, from: Position, to: Position, promotion: Option<PieceType>) -> Result<(), &'static str> {
@@ -111,23 +127,29 @@ impl Board {
         
         let mut new_en_passant_target = None;
 
-        // Check for pawn's double-step to set the en passant target for the NEXT turn
-        if piece.piece_type == PieceType::Pawn {
-            if (from.y as i8 - to.y as i8).abs() == 2 {
-                new_en_passant_target = Some(Position { x: from.x, y: (from.y + to.y) / 2 });
-            }
+        // Handle castling move: move the rook as well
+        if piece.piece_type == PieceType::King && (from.x as i8 - to.x as i8).abs() == 2 {
+            let (rook_from_x, rook_to_x) = if to.x > from.x { (7, 5) } else { (0, 3) };
+            let rook_pos = Position { x: rook_from_x, y: from.y };
+            let rook_dest = Position { x: rook_to_x, y: from.y };
+            self.grid[rook_dest.y][rook_dest.x] = self.grid[rook_pos.y][rook_pos.x].take();
         }
 
-        // Handle the actual capture in an en passant move
+        // Update castling rights if king or rook moves from its starting square
+        self.update_castling_rights_on_move(from);
+
+        // Check for pawn's double-step to set the en passant target
+        if piece.piece_type == PieceType::Pawn && (from.y as i8 - to.y as i8).abs() == 2 {
+            new_en_passant_target = Some(Position { x: from.x, y: (from.y + to.y) / 2 });
+        }
+
+        // Handle en passant capture
         if piece.piece_type == PieceType::Pawn && Some(to) == self.en_passant_target {
-            let captured_pawn_y = match piece.color {
-                Side::White => to.y + 1,
-                Side::Black => to.y - 1,
-            };
-            self.grid[captured_pawn_y][to.x] = None; // Remove the captured pawn
+            let captured_pawn_y = match piece.color { Side::White => to.y + 1, Side::Black => to.y - 1 };
+            self.grid[captured_pawn_y][to.x] = None;
         }
         
-        // Promotion
+        // Handle promotion
         let is_promotion = piece.piece_type == PieceType::Pawn && (to.y == 0 || to.y == 7);
         if is_promotion {
             let promo_piece = promotion.ok_or("Move requires a promotion piece (q, r, b, or n).")?;
@@ -140,19 +162,41 @@ impl Board {
             if promotion.is_some() {
                 return Err("Promotion can only be specified for a pawn reaching the final rank.");
             }
-            // Normal move
             self.grid[to.y][to.x] = self.grid[from.y][from.x].take();
         }
 
-        // Update state for the next turn for en passant
+        // Update state for the next turn
         self.en_passant_target = new_en_passant_target;
-        self.current_turn = match self.current_turn {
-            Side::White => Side::Black,
-            Side::Black => Side::White,
-        };
+        self.current_turn = match self.current_turn { Side::White => Side::Black, Side::Black => Side::White };
         self.update_game_status();
 
         Ok(())
+    }
+
+    fn update_castling_rights_on_move(&mut self, pos: Position) {
+        if let Some(piece) = self.grid[pos.y][pos.x] {
+            match piece.piece_type {
+                PieceType::King => {
+                    if piece.color == Side::White {
+                        self.castling_rights.white_kingside = false;
+                        self.castling_rights.white_queenside = false;
+                    } else {
+                        self.castling_rights.black_kingside = false;
+                        self.castling_rights.black_queenside = false;
+                    }
+                }
+                PieceType::Rook => {
+                    if piece.color == Side::White {
+                        if pos.x == 0 { self.castling_rights.white_queenside = false; }
+                        if pos.x == 7 { self.castling_rights.white_kingside = false; }
+                    } else {
+                        if pos.x == 0 { self.castling_rights.black_queenside = false; }
+                        if pos.x == 7 { self.castling_rights.black_kingside = false; }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn get_legal_moves(&self, pos: Position) -> Vec<Position> {
@@ -190,8 +234,16 @@ impl Board {
             for x in 0..8 {
                 if let Some(piece) = self.grid[y][x] {
                     if piece.color == by_side {
-                        let moves = self.get_pseudo_legal_moves(Position { x, y });
-                        if moves.contains(&pos) {
+                        let attacks = match piece.piece_type {
+
+                            PieceType::King => self.get_king_attack_moves(Position { x, y }),
+
+                            PieceType::Pawn => self.get_pawn_attack_moves(Position { x, y }, piece.color),
+
+                            _ => self.get_pseudo_legal_moves(Position { x, y })
+                        };
+
+                        if attacks.contains(&pos) {
                             return true;
                         }
                     }
@@ -256,6 +308,34 @@ impl Board {
         }
     }
 
+    fn get_king_attack_moves(&self, pos: Position) -> Vec<Position> {
+        let mut moves = Vec::new();
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if dx == 0 && dy == 0 { continue; }
+                let next_x = pos.x as i8 + dx;
+                let next_y = pos.y as i8 + dy;
+                if (0..8).contains(&next_x) && (0..8).contains(&next_y) {
+                    moves.push(Position { x: next_x as usize, y: next_y as usize });
+                }
+            }
+        }
+        moves
+    }
+
+    fn get_pawn_attack_moves(&self, pos: Position, color: Side) -> Vec<Position> {
+        let mut moves = Vec::new();
+        let direction: i8 = if color == Side::White { -1 } else { 1 };
+        for &dx in &[-1, 1] {
+            let capture_x = pos.x as i8 + dx;
+            let capture_y = pos.y as i8 + direction;
+            if (0..8).contains(&capture_x) && (0..8).contains(&capture_y) {
+                moves.push(Position { x: capture_x as usize, y: capture_y as usize });
+            }
+        }
+        moves
+    }
+
     fn get_sliding_moves(&self, pos: Position, color: Side, directions: &[(i8, i8)]) -> Vec<Position> {
         let mut moves = Vec::new();
         for &(dx, dy) in directions {
@@ -313,22 +393,42 @@ impl Board {
     // King moves
     fn get_king_moves(&self, pos: Position, color: Side) -> Vec<Position> {
         let mut moves = Vec::new();
+        // Single square moves
         for dy in -1..=1 {
             for dx in -1..=1 {
                 if dx == 0 && dy == 0 { continue; }
-
                 let next_x = pos.x as i8 + dx;
                 let next_y = pos.y as i8 + dy;
-
                 if (0..8).contains(&next_x) && (0..8).contains(&next_y) {
                     let next_pos = Position { x: next_x as usize, y: next_y as usize };
                     if let Some(target_piece) = self.grid[next_pos.y][next_pos.x] {
-                        if target_piece.color != color {
-                            moves.push(next_pos); // Capture
-                        }
-                    } else {
-                        moves.push(next_pos); // Empty square
-                    }
+                        if target_piece.color != color { moves.push(next_pos); }
+                    } else { moves.push(next_pos); }
+                }
+            }
+        }
+        
+        // Castling moves
+        if self.is_in_check(color) { return moves; } // Can't castle out of check
+
+        let opponent = match color { Side::White => Side::Black, Side::Black => Side::White };
+        
+        // Kingside castling
+        if (color == Side::White && self.castling_rights.white_kingside) || (color == Side::Black && self.castling_rights.black_kingside) {
+            if self.grid[pos.y][pos.x + 1].is_none() && self.grid[pos.y][pos.x + 2].is_none() {
+                if !self.is_square_attacked(Position { x: pos.x + 1, y: pos.y }, opponent) &&
+                   !self.is_square_attacked(Position { x: pos.x + 2, y: pos.y }, opponent) {
+                    moves.push(Position { x: pos.x + 2, y: pos.y });
+                }
+            }
+        }
+
+        // Queenside castling
+        if (color == Side::White && self.castling_rights.white_queenside) || (color == Side::Black && self.castling_rights.black_queenside) {
+            if self.grid[pos.y][pos.x - 1].is_none() && self.grid[pos.y][pos.x - 2].is_none() && self.grid[pos.y][pos.x - 3].is_none() {
+                if !self.is_square_attacked(Position { x: pos.x - 1, y: pos.y }, opponent) &&
+                   !self.is_square_attacked(Position { x: pos.x - 2, y: pos.y }, opponent) {
+                    moves.push(Position { x: pos.x - 2, y: pos.y });
                 }
             }
         }
