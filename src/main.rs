@@ -1,23 +1,13 @@
 use std::fmt;
 use std::io::{self, Write};
 
-// Core Data Structures
+// Core Structures
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum Side {
-    White,
-    Black,
-}
+pub enum Side { White, Black }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum PieceType {
-    Pawn,
-    Knight,
-    Bishop,
-    Rook,
-    Queen,
-    King,
-}
+pub enum PieceType { Pawn, Knight, Bishop, Rook, Queen, King }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct ChessPiece {
@@ -26,17 +16,10 @@ pub struct ChessPiece {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum GameStatus {
-    Ongoing,
-    Checkmate,
-    Stalemate,
-}
+pub enum GameStatus { Ongoing, Checkmate, Stalemate }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Position {
-    pub x: usize,
-    pub y: usize,
-}
+pub struct Position { pub x: usize, pub y: usize }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Move {
@@ -45,7 +28,7 @@ pub struct Move {
     pub promotion: Option<PieceType>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CastlingRights {
     white_kingside: bool,
     white_queenside: bool,
@@ -53,29 +36,25 @@ pub struct CastlingRights {
     black_queenside: bool,
 }
 
-impl ChessPiece {
-    pub fn new(piece_type: PieceType, color: Side) -> Self {
-        ChessPiece { piece_type, color }
-    }
+#[derive(Debug, Clone, Copy)]
+pub struct MoveData {
+    captured_piece: Option<ChessPiece>,
+    old_castling_rights: CastlingRights,
+    old_en_passant_target: Option<Position>,
+}
 
-    // Unicode chess symbols
+impl ChessPiece {
+    pub fn new(piece_type: PieceType, color: Side) -> Self { ChessPiece { piece_type, color } }
+
     fn to_char(&self) -> char {
         match self.color {
             Side::White => match self.piece_type {
-                PieceType::Pawn => '♙',
-                PieceType::Knight => '♘',
-                PieceType::Bishop => '♗',
-                PieceType::Rook => '♖',
-                PieceType::Queen => '♕',
-                PieceType::King => '♔',
+                PieceType::Pawn => '♙', PieceType::Knight => '♘', PieceType::Bishop => '♗',
+                PieceType::Rook => '♖', PieceType::Queen => '♕', PieceType::King => '♔',
             },
             Side::Black => match self.piece_type {
-                PieceType::Pawn => '♟',
-                PieceType::Knight => '♞',
-                PieceType::Bishop => '♝',
-                PieceType::Rook => '♜',
-                PieceType::Queen => '♛',
-                PieceType::King => '♚',
+                PieceType::Pawn => '♟', PieceType::Knight => '♞', PieceType::Bishop => '♝',
+                PieceType::Rook => '♜', PieceType::Queen => '♛', PieceType::King => '♚',
             },
         }
     }
@@ -99,7 +78,6 @@ impl Board {
             PieceType::Rook, PieceType::Knight, PieceType::Bishop, PieceType::Queen,
             PieceType::King, PieceType::Bishop, PieceType::Knight, PieceType::Rook,
         ];
-
         for (i, &piece_type) in back_rank.iter().enumerate() {
             grid[0][i] = Some(ChessPiece::new(piece_type, Side::Black));
             grid[7][i] = Some(ChessPiece::new(piece_type, Side::White));
@@ -108,85 +86,90 @@ impl Board {
             grid[1][i] = Some(ChessPiece::new(PieceType::Pawn, Side::Black));
             grid[6][i] = Some(ChessPiece::new(PieceType::Pawn, Side::White));
         }
-
         let castling_rights = CastlingRights {
             white_kingside: true, white_queenside: true,
             black_kingside: true, black_queenside: true,
         };
-
-        Board {
-            grid,
-            current_turn: Side::White,
-            status: GameStatus::Ongoing,
-            en_passant_target: None,
-            castling_rights,
-        }
+        Board { grid, current_turn: Side::White, status: GameStatus::Ongoing, en_passant_target: None, castling_rights }
     }
-    
-    pub fn make_move(&mut self, mv: Move) -> Result<(), &'static str> {
-        let piece = self.grid[mv.from.y][mv.from.x].ok_or("There is no piece at the starting square.")?;
-        if piece.color != self.current_turn {
-            return Err("You cannot move your opponent's piece.");
-        }
-        let legal_moves = self.get_legal_moves(mv.from);
-        if !legal_moves.contains(&mv.to) {
-            return Err("This is not a legal move for that piece.");
-        }
 
+    pub fn make_move(&mut self, mv: Move) -> MoveData {
+        let piece = self.grid[mv.from.y][mv.from.x].expect("make_move called with no piece at start");
+        let move_data = MoveData {
+            captured_piece: self.grid[mv.to.y][mv.to.x],
+            old_castling_rights: self.castling_rights,
+            old_en_passant_target: self.en_passant_target,
+        };
         let mut new_en_passant_target = None;
-
         if piece.piece_type == PieceType::King && (mv.from.x as i8 - mv.to.x as i8).abs() == 2 {
             let (rook_from_x, rook_to_x) = if mv.to.x > mv.from.x { (7, 5) } else { (0, 3) };
-            let rook_pos = Position { x: rook_from_x, y: mv.from.y };
-            let rook_dest = Position { x: rook_to_x, y: mv.from.y };
-            self.grid[rook_dest.y][rook_dest.x] = self.grid[rook_pos.y][rook_pos.x].take();
+            self.grid[mv.from.y][rook_to_x] = self.grid[mv.from.y][rook_from_x].take();
         }
-
-        self.update_castling_rights_on_move(mv.from);
-
+        self.update_castling_rights(piece, mv.from);
         if piece.piece_type == PieceType::Pawn && (mv.from.y as i8 - mv.to.y as i8).abs() == 2 {
             new_en_passant_target = Some(Position { x: mv.from.x, y: (mv.from.y + mv.to.y) / 2 });
         }
-
         if piece.piece_type == PieceType::Pawn && Some(mv.to) == self.en_passant_target {
             let captured_pawn_y = match piece.color { Side::White => mv.to.y + 1, Side::Black => mv.to.y - 1 };
             self.grid[captured_pawn_y][mv.to.x] = None;
         }
-
-        let is_promotion = piece.piece_type == PieceType::Pawn && (mv.to.y == 0 || mv.to.y == 7);
-        if is_promotion {
-            let promo_piece = mv.promotion.ok_or("Move requires a promotion piece (q, r, b, or n).")?;
-            if promo_piece == PieceType::King || promo_piece == PieceType::Pawn {
-                return Err("Invalid promotion piece.");
-            }
+        if let Some(promo_piece) = mv.promotion {
             self.grid[mv.to.y][mv.to.x] = Some(ChessPiece::new(promo_piece, piece.color));
-            self.grid[mv.from.y][mv.from.x] = None;
         } else {
-            if mv.promotion.is_some() {
-                return Err("Promotion can only be specified for a pawn reaching the final rank.");
-            }
-            self.grid[mv.to.y][mv.to.x] = self.grid[mv.from.y][mv.from.x].take();
+            self.grid[mv.to.y][mv.to.x] = self.grid[mv.from.y][mv.from.x];
         }
-
+        self.grid[mv.from.y][mv.from.x] = None;
         self.en_passant_target = new_en_passant_target;
         self.current_turn = match self.current_turn { Side::White => Side::Black, Side::Black => Side::White };
-        self.update_game_status();
-
-        Ok(())
+        move_data
     }
 
-    // The bot will call this function to get all possible moves
-    pub fn generate_all_legal_moves(&self) -> Vec<Move> {
-        let mut moves = Vec::new();
-        let side_to_move = self.current_turn;
+    pub fn unmake_move(&mut self, mv: Move, data: MoveData) {
+        let moved_piece = self.grid[mv.to.y][mv.to.x].expect("unmake_move called with no piece at destination");
+        self.current_turn = match self.current_turn { Side::White => Side::Black, Side::Black => Side::White };
+        if mv.promotion.is_some() {
+            self.grid[mv.from.y][mv.from.x] = Some(ChessPiece::new(PieceType::Pawn, moved_piece.color));
+        } else {
+            self.grid[mv.from.y][mv.from.x] = Some(moved_piece);
+        }
+        self.grid[mv.to.y][mv.to.x] = data.captured_piece;
+        if moved_piece.piece_type == PieceType::Pawn && Some(mv.to) == data.old_en_passant_target {
+            let captured_pawn_y = match moved_piece.color { Side::White => mv.to.y + 1, Side::Black => mv.to.y - 1 };
+            let opponent_color = match moved_piece.color { Side::White => Side::Black, Side::Black => Side::White };
+            self.grid[captured_pawn_y][mv.to.x] = Some(ChessPiece::new(PieceType::Pawn, opponent_color));
+        }
+        if moved_piece.piece_type == PieceType::King && (mv.from.x as i8 - mv.to.x as i8).abs() == 2 {
+            let (rook_from_x, rook_to_x) = if mv.to.x > mv.from.x { (7, 5) } else { (0, 3) };
+            self.grid[mv.from.y][rook_from_x] = self.grid[mv.from.y][rook_to_x].take();
+        }
+        self.castling_rights = data.old_castling_rights;
+        self.en_passant_target = data.old_en_passant_target;
+        self.status = GameStatus::Ongoing;
+    }
 
+    pub fn generate_all_legal_moves(&mut self) -> Vec<Move> {
+        let mut legal_moves = Vec::new();
+        let pseudo_moves = self.generate_all_pseudo_legal_moves();
+        let color_to_check = self.current_turn;
+        for mv in pseudo_moves {
+            let move_data = self.make_move(mv);
+            if !self.is_in_check(color_to_check) {
+                legal_moves.push(mv);
+            }
+            self.unmake_move(mv, move_data);
+        }
+        legal_moves
+    }
+
+    fn generate_all_pseudo_legal_moves(&self) -> Vec<Move> {
+        let mut moves = Vec::new();
         for y in 0..8 {
             for x in 0..8 {
                 if let Some(piece) = self.grid[y][x] {
-                    if piece.color == side_to_move {
+                    if piece.color == self.current_turn {
                         let from = Position { x, y };
-                        let legal_destinations = self.get_legal_moves(from);
-                        for to in legal_destinations {
+                        let destinations = self.get_pseudo_legal_moves(from);
+                        for to in destinations {
                             if piece.piece_type == PieceType::Pawn && (to.y == 0 || to.y == 7) {
                                 moves.push(Move { from, to, promotion: Some(PieceType::Queen) });
                                 moves.push(Move { from, to, promotion: Some(PieceType::Rook) });
@@ -202,46 +185,27 @@ impl Board {
         }
         moves
     }
-    fn update_castling_rights_on_move(&mut self, pos: Position) {
-        if pos.y == 7 && pos.x == 4 { // White King
-            self.castling_rights.white_kingside = false;
-            self.castling_rights.white_queenside = false;
-        } else if pos.y == 0 && pos.x == 4 { // Black King
-            self.castling_rights.black_kingside = false;
-            self.castling_rights.black_queenside = false;
-        } else if pos.y == 7 && pos.x == 7 { // White Kingside Rook
-            self.castling_rights.white_kingside = false;
-        } else if pos.y == 7 && pos.x == 0 { // White Queenside Rook
-            self.castling_rights.white_queenside = false;
-        } else if pos.y == 0 && pos.x == 7 { // Black Kingside Rook
-            self.castling_rights.black_kingside = false;
-        } else if pos.y == 0 && pos.x == 0 { // Black Queenside Rook
-            self.castling_rights.black_queenside = false;
-        }
-    }
 
-    pub fn get_legal_moves(&self, pos: Position) -> Vec<Position> {
-        let pseudo_legal_moves = self.get_pseudo_legal_moves(pos);
-        let piece_color = self.grid[pos.y][pos.x].unwrap().color;
-        let mut legal_moves = Vec::new();
-
-        for &mov in &pseudo_legal_moves {
-            let mut temp_board = self.clone();
-            // Checking legality
-            temp_board.grid[mov.y][mov.x] = temp_board.grid[pos.y][pos.x].take();
-            
-            if !temp_board.is_in_check(piece_color) {
-                legal_moves.push(mov);
+    fn update_castling_rights(&mut self, piece: ChessPiece, pos: Position) {
+        if piece.piece_type == PieceType::King {
+            if piece.color == Side::White {
+                self.castling_rights.white_kingside = false; self.castling_rights.white_queenside = false;
+            } else {
+                self.castling_rights.black_kingside = false; self.castling_rights.black_queenside = false;
+            }
+        } else if piece.piece_type == PieceType::Rook {
+            if piece.color == Side::White {
+                if pos.x == 0 && pos.y == 7 { self.castling_rights.white_queenside = false; }
+                else if pos.x == 7 && pos.y == 7 { self.castling_rights.white_kingside = false; }
+            } else {
+                if pos.x == 0 && pos.y == 0 { self.castling_rights.black_queenside = false; }
+                else if pos.x == 7 && pos.y == 0 { self.castling_rights.black_kingside = false; }
             }
         }
-        legal_moves
     }
 
     pub fn is_in_check(&self, side: Side) -> bool {
-        let king_pos = match self.find_king(side) {
-            Some(pos) => pos,
-            None => return true,
-        };
+        let king_pos = match self.find_king(side) { Some(pos) => pos, None => return true, };
         let opponent = match side { Side::White => Side::Black, Side::Black => Side::White };
         self.is_square_attacked(king_pos, opponent)
     }
@@ -251,30 +215,21 @@ impl Board {
             for x in 0..8 {
                 if let Some(piece) = self.grid[y][x] {
                     if piece.color == by_side {
+                        let current_pos = Position { x, y };
                         let attacks = match piece.piece_type {
-                            PieceType::Pawn => self.get_pawn_attack_moves(Position { x, y }, piece.color),
-
-                            PieceType::King => self.get_king_attack_moves(Position { x, y }),
-                            _ => self.get_pseudo_legal_moves(Position { x, y })
+                            PieceType::Pawn => self.get_pawn_attack_moves(current_pos, piece.color),
+                            PieceType::Knight => self.get_knight_moves(current_pos, piece.color),
+                            PieceType::King => self.get_king_attack_moves(current_pos),
+                            PieceType::Bishop => self.get_sliding_attack_moves(current_pos, &[(1, 1), (1, -1), (-1, 1), (-1, -1)]),
+                            PieceType::Rook => self.get_sliding_attack_moves(current_pos, &[(1, 0), (-1, 0), (0, 1), (0, -1)]),
+                            PieceType::Queen => self.get_sliding_attack_moves(current_pos, &[(1, 1), (1, -1), (-1, 1), (-1, -1), (1, 0), (-1, 0), (0, 1), (0, -1)]),
                         };
-                        if attacks.contains(&pos) {
-                            return true;
-                        }
+                        if attacks.contains(&pos) { return true; }
                     }
                 }
             }
         }
         false
-    }
-
-    fn update_game_status(&mut self) {
-        if self.generate_all_legal_moves().is_empty() {
-            if self.is_in_check(self.current_turn) {
-                self.status = GameStatus::Checkmate;
-            } else {
-                self.status = GameStatus::Stalemate;
-            }
-        }
     }
 
     fn find_king(&self, side: Side) -> Option<Position> {
@@ -300,34 +255,32 @@ impl Board {
                 PieceType::Queen => self.get_sliding_moves(pos, piece.color, &[(1, 1), (1, -1), (-1, 1), (-1, -1), (1, 0), (-1, 0), (0, 1), (0, -1)]),
                 PieceType::King => self.get_king_moves(pos, piece.color),
             }
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn get_king_attack_moves(&self, pos: Position) -> Vec<Position> {
-        let mut moves = Vec::new();
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                if dx == 0 && dy == 0 { continue; }
-                let next_x = pos.x as i8 + dx;
-                let next_y = pos.y as i8 + dy;
-                if (0..8).contains(&next_x) && (0..8).contains(&next_y) {
-                    moves.push(Position { x: next_x as usize, y: next_y as usize });
-                }
-            }
-        }
-        moves
+        } else { Vec::new() }
     }
 
     fn get_pawn_attack_moves(&self, pos: Position, color: Side) -> Vec<Position> {
         let mut moves = Vec::new();
         let direction: i8 = if color == Side::White { -1 } else { 1 };
         for &dx in &[-1, 1] {
-            let capture_x = pos.x as i8 + dx;
-            let capture_y = pos.y as i8 + direction;
+            let capture_x = pos.x as i8 + dx; let capture_y = pos.y as i8 + direction;
             if (0..8).contains(&capture_x) && (0..8).contains(&capture_y) {
                 moves.push(Position { x: capture_x as usize, y: capture_y as usize });
+            }
+        }
+        moves
+    }
+    
+    fn get_sliding_attack_moves(&self, pos: Position, directions: &[(i8, i8)]) -> Vec<Position> {
+        let mut moves = Vec::new();
+        for &(dx, dy) in directions {
+            let mut current_pos = pos;
+            loop {
+                let next_x = current_pos.x as i8 + dx; let next_y = current_pos.y as i8 + dy;
+                if !(0..8).contains(&next_x) || !(0..8).contains(&next_y) { break; }
+                let next_pos = Position { x: next_x as usize, y: next_y as usize };
+                moves.push(next_pos);
+                if self.grid[next_pos.y][next_pos.x].is_some() { break; }
+                current_pos = next_pos;
             }
         }
         moves
@@ -338,8 +291,7 @@ impl Board {
         for &(dx, dy) in directions {
             let mut current_pos = pos;
             loop {
-                let next_x = current_pos.x as i8 + dx;
-                let next_y = current_pos.y as i8 + dy;
+                let next_x = current_pos.x as i8 + dx; let next_y = current_pos.y as i8 + dy;
                 if !(0..8).contains(&next_x) || !(0..8).contains(&next_y) { break; }
                 let next_pos = Position { x: next_x as usize, y: next_y as usize };
                 current_pos = next_pos;
@@ -356,8 +308,7 @@ impl Board {
         let mut moves = Vec::new();
         let knight_moves: [(i8, i8); 8] = [(1, 2), (1, -2), (-1, 2), (-1, -2), (2, 1), (2, -1), (-2, 1), (-2, -1)];
         for &(dx, dy) in &knight_moves {
-            let next_x = pos.x as i8 + dx;
-            let next_y = pos.y as i8 + dy;
+            let next_x = pos.x as i8 + dx; let next_y = pos.y as i8 + dy;
             if (0..8).contains(&next_x) && (0..8).contains(&next_y) {
                 let next_pos = Position { x: next_x as usize, y: next_y as usize };
                 if let Some(target_piece) = self.grid[next_pos.y][next_pos.x] {
@@ -368,21 +319,38 @@ impl Board {
         moves
     }
 
-    fn get_king_moves(&self, pos: Position, color: Side) -> Vec<Position> {
-        let mut moves = self.get_king_attack_moves(pos); // Start with regular moves
-        if self.is_in_check(color) { return moves; }
-        let opponent = match color { Side::White => Side::Black, Side::Black => Side::White };
-        if (color == Side::White && self.castling_rights.white_kingside) || (color == Side::Black && self.castling_rights.black_kingside) {
-            if self.grid[pos.y][pos.x + 1].is_none() && self.grid[pos.y][pos.x + 2].is_none() {
-                if !self.is_square_attacked(Position { x: pos.x + 1, y: pos.y }, opponent) && !self.is_square_attacked(Position { x: pos.x + 2, y: pos.y }, opponent) {
-                    moves.push(Position { x: pos.x + 2, y: pos.y });
+    fn get_king_attack_moves(&self, pos: Position) -> Vec<Position> {
+        let mut moves = Vec::new();
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if dx == 0 && dy == 0 { continue; }
+                let next_x = pos.x as i8 + dx; let next_y = pos.y as i8 + dy;
+                if (0..8).contains(&next_x) && (0..8).contains(&next_y) {
+                    moves.push(Position { x: next_x as usize, y: next_y as usize });
                 }
             }
         }
-        if (color == Side::White && self.castling_rights.white_queenside) || (color == Side::Black && self.castling_rights.black_queenside) {
-            if self.grid[pos.y][pos.x - 1].is_none() && self.grid[pos.y][pos.x - 2].is_none() && self.grid[pos.y][pos.x - 3].is_none() {
-                if !self.is_square_attacked(Position { x: pos.x - 1, y: pos.y }, opponent) && !self.is_square_attacked(Position { x: pos.x - 2, y: pos.y }, opponent) {
-                    moves.push(Position { x: pos.x - 2, y: pos.y });
+        moves
+    }
+
+    fn get_king_moves(&self, pos: Position, color: Side) -> Vec<Position> {
+        let mut moves = self.get_king_attack_moves(pos);
+        
+        // Add castling moves
+        if !self.is_in_check(color) {
+            let opponent = match color { Side::White => Side::Black, Side::Black => Side::White };
+            if (color == Side::White && self.castling_rights.white_kingside) || (color == Side::Black && self.castling_rights.black_kingside) {
+                if self.grid[pos.y][pos.x + 1].is_none() && self.grid[pos.y][pos.x + 2].is_none() {
+                    if !self.is_square_attacked(Position { x: pos.x + 1, y: pos.y }, opponent) && !self.is_square_attacked(Position { x: pos.x + 2, y: pos.y }, opponent) {
+                        moves.push(Position { x: pos.x + 2, y: pos.y });
+                    }
+                }
+            }
+            if (color == Side::White && self.castling_rights.white_queenside) || (color == Side::Black && self.castling_rights.black_queenside) {
+                if self.grid[pos.y][pos.x - 1].is_none() && self.grid[pos.y][pos.x - 2].is_none() && self.grid[pos.y][pos.x - 3].is_none() {
+                    if !self.is_square_attacked(Position { x: pos.x - 1, y: pos.y }, opponent) && !self.is_square_attacked(Position { x: pos.x - 2, y: pos.y }, opponent) {
+                        moves.push(Position { x: pos.x - 2, y: pos.y });
+                    }
                 }
             }
         }
@@ -406,8 +374,7 @@ impl Board {
             }
         }
         for &dx in &[-1, 1] {
-            let capture_x = pos.x as i8 + dx;
-            let capture_y = pos.y as i8 + direction;
+            let capture_x = pos.x as i8 + dx; let capture_y = pos.y as i8 + direction;
             if (0..8).contains(&capture_x) && (0..8).contains(&capture_y) {
                 let capture_pos = Position { x: capture_x as usize, y: capture_y as usize };
                 if let Some(target) = self.grid[capture_pos.y][capture_pos.x] {
@@ -422,26 +389,14 @@ impl Board {
 
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // ANSI codes for colors
-        const WHITE_SQUARE: &str = "\x1B[48;5;250m"; // Light grey background
-        const BLACK_SQUARE: &str = "\x1B[48;5;240m"; // Dark grey background
+        const WHITE_SQUARE: &str = "\x1B[48;5;250m"; const BLACK_SQUARE: &str = "\x1B[48;5;240m";
         const RESET_COLOR: &str = "\x1B[0m";
-
         writeln!(f, "\n   a  b  c  d  e  f  g  h")?;
         for y in 0..8 {
             write!(f, "{} ", 8 - y)?;
             for x in 0..8 {
-                let bg_color = if (x + y) % 2 == 0 {
-                    WHITE_SQUARE
-                } else {
-                    BLACK_SQUARE
-                };
-                
-                let piece_char = match self.grid[y][x] {
-                    Some(piece) => piece.to_char(),
-                    None => ' ',
-                };
-                // Print the square with its background color and the piece
+                let bg_color = if (x + y) % 2 == 0 { WHITE_SQUARE } else { BLACK_SQUARE };
+                let piece_char = match self.grid[y][x] { Some(piece) => piece.to_char(), None => ' ' };
                 write!(f, "{}{}{}{}", bg_color, " ", piece_char, " ")?;
             }
             writeln!(f, "{}{}", RESET_COLOR, 8 - y)?;
@@ -450,109 +405,95 @@ impl fmt::Display for Board {
     }
 }
 
-// Chess bot
+// Chess Bot
 
 pub struct ChessBot {
     side: Side,
 }
 
 impl ChessBot {
-    pub fn new(side: Side) -> Self {
-        ChessBot { side }
-    }
+    pub fn new(side: Side) -> Self { ChessBot { side } }
 
-    // Find the best move
-    pub fn find_best_move(&self, board: &Board) -> Option<Move> {
-        // We start the search with the worst possible score for us (alpha)
-        // and the best possible score for the opponent (beta)
-        let alpha = -i32::MAX;
-        let beta = i32::MAX;
-        let depth = 3; // Look 3 moves ahead as requested.
-
+    pub fn find_best_move(&self, board: &mut Board) -> Option<Move> {
+        let depth = 6; // Depth of the search
         let moves = board.generate_all_legal_moves();
-        if moves.is_empty() {
-            return None;
-        }
+        if moves.is_empty() { return None; }
 
         let mut best_move = moves[0];
         let mut max_eval = -i32::MAX;
 
-        for mv in moves {
-            let mut temp_board = board.clone();
-            temp_board.make_move(mv).ok()?;
-            
-            // Call the search function for the opponent's turn
-            let eval = self.minimax(&temp_board, depth - 1, alpha, beta, false);
-
+        for &mv in &moves {
+            let move_data = board.make_move(mv);
+            let eval = self.minimax(board, depth - 1, -i32::MAX, i32::MAX, false);
+            board.unmake_move(mv, move_data);
             if eval > max_eval {
                 max_eval = eval;
                 best_move = mv;
             }
         }
-
         Some(best_move)
     }
 
-    // Recursive minimax search function
-    fn minimax(&self, board: &Board, depth: u8, mut alpha: i32, mut beta: i32, maximizing_player: bool) -> i32 {
-        if depth == 0 || board.status != GameStatus::Ongoing {
-            return self.evaluate(board);
-        }
-
+    fn minimax(&self, board: &mut Board, depth: u8, mut alpha: i32, mut beta: i32, maximizing_player: bool) -> i32 {
+        if depth == 0 { return self.evaluate(board); }
+        
         let moves = board.generate_all_legal_moves();
+        if moves.is_empty() {
+            if board.is_in_check(board.current_turn) {
+                return -i32::MAX + (5 - depth as i32); 
+            }
+            return 0; // Stalemate
+        }
 
         if maximizing_player {
             let mut max_eval = -i32::MAX;
-            for mv in moves {
-                let mut temp_board = board.clone();
-                temp_board.make_move(mv).unwrap();
-                let eval = self.minimax(&temp_board, depth - 1, alpha, beta, false);
+            for &mv in &moves {
+                let move_data = board.make_move(mv);
+                let eval = self.minimax(board, depth - 1, alpha, beta, false);
+                board.unmake_move(mv, move_data);
                 max_eval = max_eval.max(eval);
                 alpha = alpha.max(eval);
-                if beta <= alpha {
-                    break; // Beta cutoff
-                }
+                if beta <= alpha { break; }
             }
             max_eval
-        } else { // Minimizing player
+        } else {
             let mut min_eval = i32::MAX;
-            for mv in moves {
-                let mut temp_board = board.clone();
-                temp_board.make_move(mv).unwrap();
-                let eval = self.minimax(&temp_board, depth - 1, alpha, beta, true);
+            for &mv in &moves {
+                let move_data = board.make_move(mv);
+                let eval = self.minimax(board, depth - 1, alpha, beta, true);
+                board.unmake_move(mv, move_data);
                 min_eval = min_eval.min(eval);
                 beta = beta.min(eval);
-                if beta <= alpha {
-                    break; // Alpha cutoff
-                }
+                if beta <= alpha { break; }
             }
             min_eval
         }
     }
-
-    // The evaluation function. Assigns a score to a board position
+    
     fn evaluate(&self, board: &Board) -> i32 {
         let mut score = 0;
         for y in 0..8 {
             for x in 0..8 {
                 if let Some(piece) = board.grid[y][x] {
-                    let value = match piece.piece_type {
-                        PieceType::Pawn => 100,
-                        PieceType::Knight => 320,
-                        PieceType::Bishop => 330,
-                        PieceType::Rook => 500,
-                        PieceType::Queen => 900,
-                        PieceType::King => 20000,
+                    let material_value = match piece.piece_type {
+                        PieceType::Pawn => 100, PieceType::Knight => 320,
+                        PieceType::Bishop => 330, PieceType::Rook => 500,
+                        PieceType::Queen => 900, PieceType::King => 20000,
                     };
+
+                    let positional_value = 0;
+                    
+                    let total_value = material_value + positional_value;
+
                     if piece.color == self.side {
-                        score += value;
+                        score += total_value;
                     } else {
-                        score -= value;
+                        score -= total_value;
                     }
                 }
             }
         }
-        score
+        if board.current_turn == self.side { score + 10 } else { score - 10 }
     }
 }
 
@@ -561,22 +502,14 @@ impl ChessBot {
 fn parse_move_str(input: &str) -> Result<Move, &'static str> {
     let trimmed_input = input.trim().to_lowercase();
     let chars: Vec<char> = trimmed_input.chars().collect();
-    if !(4..=5).contains(&chars.len()) {
-        return Err("Invalid input length. Use format 'e2e4' or 'e7e8q'.");
-    }
-
+    if !(4..=5).contains(&chars.len()) { return Err("Invalid input length. Use format 'e2e4' or 'e7e8q'."); }
     let from_x = (chars[0] as u8).wrapping_sub(b'a') as usize;
     let to_x = (chars[2] as u8).wrapping_sub(b'a') as usize;
     let from_y = 8_usize.wrapping_sub(chars[1].to_digit(10).unwrap_or(9) as usize);
     let to_y = 8_usize.wrapping_sub(chars[3].to_digit(10).unwrap_or(9) as usize);
-
-    if from_x > 7 || to_x > 7 || from_y > 7 || to_y > 7 {
-        return Err("Invalid coordinate. Files 'a'-'h', ranks '1'-'8'.");
-    }
-
+    if from_x > 7 || to_x > 7 || from_y > 7 || to_y > 7 { return Err("Invalid coordinate. Files 'a'-'h', ranks '1'-'8'."); }
     let from = Position { x: from_x, y: from_y };
     let to = Position { x: to_x, y: to_y };
-
     let promotion = if chars.len() == 5 {
         let promo_char = chars[4];
         let piece_type = match promo_char {
@@ -585,28 +518,20 @@ fn parse_move_str(input: &str) -> Result<Move, &'static str> {
             _ => return Err("Invalid promotion character. Use q, r, b, or n."),
         };
         Some(piece_type)
-    } else {
-        None
-    };
-
+    } else { None };
     Ok(Move { from, to, promotion })
 }
 
 fn main() {
     let mut board = Board::new();
     let mut message: Option<String> = None;
-    
-    // Create the bot for the Black side
     let bot = ChessBot::new(Side::Black);
 
     loop {
         print!("\x1B[2J\x1B[1;1H");
         println!("{}", board);
+        if let Some(msg) = &message { println!("\nInfo: {}", msg); }
         
-        if let Some(msg) = &message {
-            println!("\nInfo: {}", msg);
-        }
-
         if board.status != GameStatus::Ongoing {
             println!("\n--- GAME OVER ---");
             match board.status {
@@ -620,37 +545,49 @@ fn main() {
             break;
         }
 
-        if board.is_in_check(board.current_turn) {
-            println!("\n{:?} is in CHECK!", board.current_turn);
-        }
-
-        // Check whose turn it is
+        if board.is_in_check(board.current_turn) { println!("\n{:?} is in CHECK!", board.current_turn); }
+        
         if board.current_turn == bot.side {
-            // Bot's turn
             println!("\n{:?}'s turn. Bot is thinking...", board.current_turn);
-            if let Some(best_move) = bot.find_best_move(&board) {
-                board.make_move(best_move).unwrap();
-                message = Some(format!("Bot moved from {:?} to {:?}", best_move.from, best_move.to));
+            
+            let best_move_option = bot.find_best_move(&mut board);
+
+            if let Some(best_move) = best_move_option {
+                let _ = board.make_move(best_move);
+                let from_str = format!("{}{}", (b'a' + best_move.from.x as u8) as char, 8 - best_move.from.y);
+                let to_str = format!("{}{}", (b'a' + best_move.to.x as u8) as char, 8 - best_move.to.y);
+                message = Some(format!("Bot moved from {} to {}", from_str, to_str));
+            } else {
+                 board.status = if board.is_in_check(board.current_turn) { GameStatus::Checkmate } else { GameStatus::Stalemate };
             }
         } else {
-            // Player's turn
             println!("\n{:?}'s turn.", board.current_turn);
             print!("Enter move (e.g. e2e4) or 'quit': ");
             io::stdout().flush().unwrap();
-
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
-
             if input.trim() == "quit" { break; }
-
             match parse_move_str(&input) {
                 Ok(mv) => {
-                    match board.make_move(mv) {
-                        Ok(()) => message = None,
-                        Err(e) => message = Some(e.to_string()),
+                    let legal_moves = board.generate_all_legal_moves();
+                    if legal_moves.contains(&mv) {
+                        let _ = board.make_move(mv);
+                        message = None;
+                    } else {
+                        message = Some("That is not a legal move.".to_string());
                     }
-                }
+                },
                 Err(e) => message = Some(e.to_string()),
+            }
+        }
+        
+        // Check game status at the end of the turn.
+        let mut temp_board = board.clone();
+        if temp_board.generate_all_legal_moves().is_empty() {
+             if temp_board.is_in_check(temp_board.current_turn) {
+                board.status = GameStatus::Checkmate;
+            } else {
+                board.status = GameStatus::Stalemate;
             }
         }
     }
